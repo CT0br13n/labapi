@@ -1,0 +1,72 @@
+name: build-and-deploy
+
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - run: dotnet publish labapi.csproj -c Release -o publish
+      - uses: actions/upload-artifact@v4
+        with:
+          name: labapi
+          path: publish
+
+  deploy-dev:
+    needs: build
+    runs-on: [self-hosted, iis]
+    environment: dev
+    env:
+      TARGET: C:\sites\labapi-dev
+      SITEHOST: api-dev.local
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: labapi
+          path: publish
+      - name: Deploy to IIS
+        shell: powershell
+        run: |
+          Set-Content "$env:TARGET\app_offline.htm" '<h1>Deploying, back shortly</h1>'
+          Start-Sleep 2
+          robocopy publish $env:TARGET /MIR /XF app_offline.htm /XD logs /NFL /NDL /NJH /NP
+          if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $LASTEXITCODE" }
+          Remove-Item "$env:TARGET\app_offline.htm"
+          Start-Sleep 3
+          (Invoke-WebRequest http://localhost/api/info -Headers @{Host=$env:SITEHOST} -UseBasicParsing).Content
+          exit 0
+
+  deploy-prod:
+    needs: deploy-dev
+    if: github.ref == 'refs/heads/main'
+    runs-on: [self-hosted, iis]
+    environment: production
+    env:
+      TARGET: C:\sites\labapi
+      SITEHOST: api.local
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: labapi
+          path: publish
+      - name: Deploy to IIS
+        shell: powershell
+        run: |
+          Set-Content "$env:TARGET\app_offline.htm" '<h1>Deploying, back shortly</h1>'
+          Start-Sleep 2
+          robocopy publish $env:TARGET /MIR /XF app_offline.htm /XD logs /NFL /NDL /NJH /NP
+          if ($LASTEXITCODE -ge 8) { throw "robocopy failed: $LASTEXITCODE" }
+          Remove-Item "$env:TARGET\app_offline.htm"
+          Start-Sleep 3
+          (Invoke-WebRequest http://localhost/api/info -Headers @{Host=$env:SITEHOST} -UseBasicParsing).Content
+          exit 0
